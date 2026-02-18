@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import os
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
@@ -13,6 +14,7 @@ PHONE = os.getenv("PHONE")
 
 KEYWORDS_INCLUDE = [kw.strip().lower() for kw in os.getenv("KEYWORDS_INCLUDE", "").split(",") if kw.strip()]
 KEYWORDS_EXCLUDE = [kw.strip().lower() for kw in os.getenv("KEYWORDS_EXCLUDE", "").split(",") if kw.strip()]
+KEYWORDS_JOB = [kw.strip().lower() for kw in os.getenv("KEYWORDS_JOB", "").split(",") if kw.strip()]
 
 TARGET_GROUP = os.getenv("TARGET_GROUP", "Vagas")
 DAYS_BACK = int(os.getenv("DAYS_BACK", "30"))
@@ -21,13 +23,26 @@ client = TelegramClient("session", API_ID, API_HASH)
 
 
 def matches_filter(text: str) -> bool:
-    """Verifica se o texto passa no filtro de include/exclude."""
+    """Verifica se o texto é uma vaga e passa no filtro de include/exclude."""
     if not text:
         return False
     text_lower = text.lower()
+
+    is_job = any(kw in text_lower for kw in KEYWORDS_JOB)
+    if not is_job:
+        return False
+
     has_include = any(kw in text_lower for kw in KEYWORDS_INCLUDE)
+
     has_exclude = any(kw in text_lower for kw in KEYWORDS_EXCLUDE)
+
     return has_include and not has_exclude
+
+
+def get_text_hash(text: str) -> str:
+    """Gera um hash do texto normalizado para detectar duplicatas."""
+    normalized = " ".join(text.lower().split())
+    return hashlib.md5(normalized.encode()).hexdigest()
 
 
 def format_message(msg: Message, group_name: str) -> str:
@@ -97,6 +112,7 @@ async def main():
         groups = [g for g in groups if g.entity.id != target.id]
 
         print(f"📂 Grupos para escanear: {len(groups)}")
+        print(f"💼 Palavras de vaga:    {', '.join(KEYWORDS_JOB)}")
         print(f"🔎 Palavras incluídas: {', '.join(KEYWORDS_INCLUDE)}")
         print(f"🚫 Palavras excluídas: {', '.join(KEYWORDS_EXCLUDE)}")
 
@@ -104,8 +120,8 @@ async def main():
         print(f"📅 Buscando mensagens dos últimos {DAYS_BACK} dias (desde {since.strftime('%d/%m/%Y')})")
         print(f"\n{'═' * 50}\n")
 
+        all_jobs = []  
         total_found = 0
-        total_sent = 0
 
         for i, dialog in enumerate(groups, 1):
             print(f"[{i}/{len(groups)}] Escaneando: {dialog.name}...", end=" ", flush=True)
@@ -113,26 +129,53 @@ async def main():
             matched = await scan_group(client, dialog, since)
 
             if matched:
-                print(f"✅ {len(matched)} vaga(s) encontrada(s)!")
+                print(f"✅ {len(matched)} vaga(s)")
                 total_found += len(matched)
-
                 for msg in matched:
-                    try:
-                        formatted = format_message(msg, dialog.name)
-                        await client.send_message(target, formatted)
-                        total_sent += 1
-                        await asyncio.sleep(1.5)
-                    except Exception as e:
-                        print(f"  ⚠️  Erro ao enviar mensagem: {e}")
+                    all_jobs.append((msg, dialog.name))
             else:
                 print("—")
 
+        seen_hashes = set()
+        unique_jobs = []
+
+        for msg, group_name in all_jobs:
+            msg_hash = get_text_hash(msg.text)
+            if msg_hash not in seen_hashes:
+                seen_hashes.add(msg_hash)
+                unique_jobs.append((msg, group_name))
+
+        total_duplicates = total_found - len(unique_jobs)
+
+        unique_jobs.sort(key=lambda x: x[0].date, reverse=True)
+
+        print(f"\n{'═' * 50}")
+        print(f"📋 {len(unique_jobs)} vagas únicas | 🔄 {total_duplicates} duplicadas removidas")
+        print(f"📤 Enviando para {TARGET_GROUP} (mais recentes primeiro)...")
+        print(f"{'═' * 50}\n")
+
+        total_sent = 0
+
+        for msg, group_name in unique_jobs:
+            try:
+                formatted = format_message(msg, group_name)
+                await client.send_message(target, formatted)
+                total_sent += 1
+                date_str = msg.date.strftime("%d/%m/%Y")
+                print(f"  [{total_sent}/{len(unique_jobs)}] ✅ {date_str} — {group_name}")
+                await asyncio.sleep(1.5)
+            except Exception as e:
+                print(f"  ⚠️  Erro ao enviar mensagem: {e}")
+
+        end_date = datetime.now(timezone.utc)
         print(f"\n{'═' * 50}")
         print(f"📊 Resumo:")
-        print(f"   Grupos escaneados: {len(groups)}")
-        print(f"   Vagas encontradas: {total_found}")
-        print(f"   Vagas enviadas:    {total_sent}")
-        print(f"   Destino:           {TARGET_GROUP}")
+        print(f"   📅 Período:          {since.strftime('%d/%m/%Y')} até {end_date.strftime('%d/%m/%Y')}")
+        print(f"   📂 Grupos escaneados: {len(groups)}")
+        print(f"   🔍 Vagas encontradas: {total_found}")
+        print(f"   🔄 Duplicadas puladas: {total_duplicates}")
+        print(f"   ✅ Vagas enviadas:    {total_sent}")
+        print(f"   📬 Destino:           {TARGET_GROUP}")
         print(f"{'═' * 50}\n")
 
 
