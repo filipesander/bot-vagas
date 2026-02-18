@@ -3,11 +3,10 @@ import os
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 from telethon import TelegramClient
-from telethon.tl.types import Channel, Chat, Message
+from telethon.tl.types import Channel, Message
 
 load_dotenv()
 
-# ── Configurações ──────────────────────────────────────────────
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 PHONE = os.getenv("PHONE")
@@ -18,7 +17,6 @@ KEYWORDS_EXCLUDE = [kw.strip().lower() for kw in os.getenv("KEYWORDS_EXCLUDE", "
 TARGET_GROUP = os.getenv("TARGET_GROUP", "Vagas")
 DAYS_BACK = int(os.getenv("DAYS_BACK", "30"))
 
-# ── Cliente ────────────────────────────────────────────────────
 client = TelegramClient("session", API_ID, API_HASH)
 
 
@@ -61,7 +59,6 @@ async def get_all_groups(client: TelegramClient) -> list:
     async for dialog in client.iter_dialogs():
         if dialog.is_group or dialog.is_channel:
             entity = dialog.entity
-            # Pula canais de broadcast (só pega grupos e supergrupos)
             if isinstance(entity, Channel) and entity.broadcast:
                 continue
             groups.append(dialog)
@@ -72,7 +69,7 @@ async def scan_group(client: TelegramClient, dialog, since: datetime) -> list:
     """Escaneia um grupo e retorna mensagens que passam no filtro."""
     matched = []
     try:
-        async for msg in client.iter_messages(dialog.entity, offset_date=datetime.now(timezone.utc), reverse=False):
+        async for msg in client.iter_messages(dialog.entity):
             if msg.date.replace(tzinfo=timezone.utc) < since:
                 break
             if msg.text and matches_filter(msg.text):
@@ -88,7 +85,6 @@ async def main():
         me = await client.get_me()
         print(f"\n🤖 Conectado como: {me.first_name} ({me.phone})\n")
 
-        # ── Encontrar grupo destino ────────────────────────────────
         target = await find_target_group(client)
         if not target:
             print(f"❌ Grupo '{TARGET_GROUP}' não encontrado!")
@@ -97,9 +93,7 @@ async def main():
 
         print(f"✅ Grupo destino encontrado: {TARGET_GROUP}")
 
-        # ── Listar grupos ──────────────────────────────────────────
         groups = await get_all_groups(client)
-        # Remove o grupo destino da lista de busca
         groups = [g for g in groups if g.entity.id != target.id]
 
         print(f"📂 Grupos para escanear: {len(groups)}")
@@ -127,14 +121,12 @@ async def main():
                         formatted = format_message(msg, dialog.name)
                         await client.send_message(target, formatted)
                         total_sent += 1
-                        # Delay pra não tomar flood do Telegram
                         await asyncio.sleep(1.5)
                     except Exception as e:
                         print(f"  ⚠️  Erro ao enviar mensagem: {e}")
             else:
                 print("—")
 
-        # ── Resumo ─────────────────────────────────────────────────
         print(f"\n{'═' * 50}")
         print(f"📊 Resumo:")
         print(f"   Grupos escaneados: {len(groups)}")
